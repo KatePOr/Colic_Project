@@ -1,0 +1,149 @@
+---
+title: "Predicting Survival From Colic"
+author: "Kate O'Rourke"
+date: "2024-09-04"
+output: pdf_document
+---
+
+# Load Libraries
+
+```{r}
+library(tidyverse)
+library(tidyr)
+```
+
+# Load Data
+
+```{r}
+colic_training <- read.delim("Data/horse-colic.data", sep=" ", header=FALSE)
+colic_training$V29 <- NULL
+colic_test <- read.delim("Data/horse-colic.test", sep=" ", header=FALSE)
+```
+
+## Rename columns
+
+```{r}
+colic_training <- colic_training %>% 
+  rename(
+    surgery = V1,
+    age = V2,
+    hospital_id = V3,
+    rectal_temperature = V4,
+    pulse = V5,
+    respiratory_rate = V6,
+    extremity_temperature = V7,
+    peripheral_pulse = V8,
+    mucous_membrane = V9,
+    capillary_refill_time = V10,
+    pain_rating = V11,
+    peristalsis = V12,
+    abdominal_distension = V13,
+    nasogastric_tube = V14,
+    nasogastric_reflux = V15,
+    nasogastric_reflux_pH = V16,
+    rectal_exam_feces = V17,
+    abdomen = V18,
+    packed_cell_Volume = V19,
+    total_protein = V20,
+    abdominocentesis_appearance = V21,
+    abdominocentesis_total_protein = V22,
+    outcome = V23,
+    surgical_lesion = V24,
+    type_of_lesion1 = V25,
+    type_of_lesion2 = V26,
+    type_of_lesion3 = V27,
+    cp_data = V28
+    )
+
+colic_test <- colic_test %>% 
+  rename(
+    surgery = V1,
+    age = V2,
+    hospital_id = V3,
+    rectal_temperature = V4,
+    pulse = V5,
+    respiratory_rate = V6,
+    extremity_temperature = V7,
+    peripheral_pulse = V8,
+    mucous_membrane = V9,
+    capillary_refill_time = V10,
+    pain_rating = V11,
+    peristalsis = V12,
+    abdominal_distension = V13,
+    nasogastric_tube = V14,
+    nasogastric_reflux = V15,
+    nasogastric_reflux_pH = V16,
+    rectal_exam_feces = V17,
+    abdomen = V18,
+    packed_cell_Volume = V19,
+    total_protein = V20,
+    abdominocentesis_appearance = V21,
+    abdominocentesis_total_protein = V22,
+    outcome = V23,
+    surgical_lesion = V24,
+    type_of_lesion1 = V25,
+    type_of_lesion2 = V26,
+    type_of_lesion3 = V27,
+    cp_data = V28
+    )
+```
+
+## Deal with ? or missing data
+
+```{r}
+# Replace "?" with NA
+colic_test <-  replace(colic_test, colic_test=="?", NA)
+colSums(is.na(colic_test))
+
+colic_training <-  replace(colic_training, colic_training=="?", NA)
+colSums(is.na(colic_training))
+
+# Remove nasogastric columns as there are not enough data points
+colic_training <- colic_training[, -c(14:16) ]
+colic_test <- colic_test[, -c(14:16) ]
+
+
+```
+```{r}
+# One row with NA values in Surgery is removed from colic_training and colic_test
+colic_training <- colic_training[-(which(is.na(colic_training$surgery))),]
+colic_test <- colic_test[-(which(is.na(colic_test$surgery))),]
+```
+```{r}
+# Convert columns to numeric if containing numeric data
+colic_test[, c(4,5,6,16,17)] <- sapply(colic_test[, c(4,5,6,16,17)], as.numeric)
+colic_training[, c(4,5,6,16,17)] <- sapply(colic_training[, c(4,5,6,16,17)], as.numeric)
+
+
+# Convert columns to factor if containing factor data
+colic_test[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)] <- lapply(colic_test[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)], as.character)
+colic_training[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)] <- lapply(colic_training[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)], as.character)
+
+#Replace NA values with median values for rectal temperature, pulse, respiratory_rate, packed_cell_volume, total_protein
+colic_training <- colic_training %>% mutate(across(rectal_temperature, ~replace_na(., median(., na.rm=TRUE))))
+colic_training <- colic_training %>% mutate(across(pulse, ~replace_na(., median(., na.rm=TRUE))))
+colic_training <- colic_training %>% mutate(across(respiratory_rate, ~replace_na(., median(., na.rm=TRUE))))
+colic_training <- colic_training %>% mutate(across(packed_cell_Volume, ~replace_na(., median(., na.rm=TRUE))))
+colic_training <- colic_training %>% mutate(across(total_protein, ~replace_na(., median(., na.rm=TRUE))))
+
+colic_test <- colic_test %>% mutate(across(rectal_temperature, ~replace_na(., median(., na.rm=TRUE))))
+colic_test <- colic_test %>% mutate(across(pulse, ~replace_na(., median(., na.rm=TRUE))))
+colic_test <- colic_test %>% mutate(across(respiratory_rate, ~replace_na(., median(., na.rm=TRUE))))
+colic_test <- colic_test %>% mutate(across(packed_cell_Volume, ~replace_na(., median(., na.rm=TRUE))))
+colic_test <- colic_test %>% mutate(across(total_protein, ~replace_na(., median(., na.rm=TRUE))))
+```
+```{r}
+# Replace NA values with mode for extremity_temperature, peripheral_pulse, mucous membrane, capillary_refill_time, pain_rating, peristalsis, abdominal_distension
+
+```
+
+```{r}
+
+#Replace NA values with mode of specific sections for rectal_exam_feces, abdomen, abdominocentesis_appearance, abdominocentesis_total_protein
+tallied <- colic_training %>% group_by(rectal_exam_feces, abdominal_distension, mucous_membrane, capillary_refill_time, peristalsis) %>% 
+  summarize(frequency = n()) %>% 
+  filter(frequency == max(frequency)) %>%
+  ungroup()
+colic_training$rectal_exam_feces <- replace(colic_training$rectal_exam_feces, is.na(colic_training$rectal_exam_feces), tallied$rectal_exam_feces[tallied$abdominal_distension==colic_training$abdominal_distension & tallied$mucous_membrane==colic_training$mucous_membrane & tallied$capillary_refill_time==colic_training$capillary_refill_time & tallied$peristalsis==colic_training$peristalsis] )
+
+```
