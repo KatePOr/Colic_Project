@@ -10,6 +10,9 @@ output: pdf_document
 ```{r}
 library(tidyverse)
 library(tidyr)
+library(caret)
+library(dplyr)
+library(mice)
 ```
 
 # Load Data
@@ -20,42 +23,16 @@ colic_training$V29 <- NULL
 colic_test <- read.delim("Data/horse-colic.test", sep=" ", header=FALSE)
 ```
 
+## Merge the two datasets
+```{r}
+## Merge test and training datasets
+colic_data <- rbind(colic_test, colic_training)
+```
+
 ## Rename columns
 
 ```{r}
-colic_training <- colic_training %>% 
-  rename(
-    surgery = V1,
-    age = V2,
-    hospital_id = V3,
-    rectal_temperature = V4,
-    pulse = V5,
-    respiratory_rate = V6,
-    extremity_temperature = V7,
-    peripheral_pulse = V8,
-    mucous_membrane = V9,
-    capillary_refill_time = V10,
-    pain_rating = V11,
-    peristalsis = V12,
-    abdominal_distension = V13,
-    nasogastric_tube = V14,
-    nasogastric_reflux = V15,
-    nasogastric_reflux_pH = V16,
-    rectal_exam_feces = V17,
-    abdomen = V18,
-    packed_cell_Volume = V19,
-    total_protein = V20,
-    abdominocentesis_appearance = V21,
-    abdominocentesis_total_protein = V22,
-    outcome = V23,
-    surgical_lesion = V24,
-    type_of_lesion1 = V25,
-    type_of_lesion2 = V26,
-    type_of_lesion3 = V27,
-    cp_data = V28
-    )
-
-colic_test <- colic_test %>% 
+colic_data <- colic_data %>% 
   rename(
     surgery = V1,
     age = V2,
@@ -89,64 +66,249 @@ colic_test <- colic_test %>%
 ```
 
 ## Deal with ? or missing data
-
 ```{r}
 # Replace "?" with NA
-colic_test <-  replace(colic_test, colic_test=="?", NA)
-colSums(is.na(colic_test))
+colic_data <-  replace(colic_data, colic_data=="?", NA)
+colSums(is.na(colic_data))
 
-colic_training <-  replace(colic_training, colic_training=="?", NA)
-colSums(is.na(colic_training))
+# Remove columns where there are fewer than 70% of data points populated
+colic_data <- colic_data[, -c(14:18, 21:22, 24:28) ]
 
-# Remove nasogastric columns as there are not enough data points
-colic_training <- colic_training[, -c(14:16) ]
-colic_test <- colic_test[, -c(14:16) ]
+# Remove hospital_id column
+colic_data <- colic_data[, -3 ]
 
-
+# Change levels in outcome to align with 1 being survived and 0 being did not survive
+colic_data$outcome[colic_data$outcome == "1"] <- 1
+colic_data$outcome[colic_data$outcome == "2"] <- 0
+colic_data$outcome[colic_data$outcome == "3"] <- 0
 ```
+
+# Determine training-test split
 ```{r}
-# One row with NA value in Surgery is removed from colic_training and colic_test
-colic_training <- colic_training[-(which(is.na(colic_training$surgery))),]
-colic_test <- colic_test[-(which(is.na(colic_test$surgery))),]
+## Written by Katherine S. Geist, PhD
+## Merrimack College, Massachusetts
+## Please do not distribute without attribution
+## https://github.com/ksgeist
 
-# Remove rows with NA values for Rectal_temperature, pulse, and respiratory_rate
+calcSplitRatio <- function(p = NA, df) {
+  ## @p  = the number of parameters. by default, if none are provided, the number of columns (predictors) in the dataset are used
+  ## @df = the dataframe that will be used for the analysis
+  
+  ## If the number of parameters isn't supplied, set it to the number of features minus 1 for the target
+  if(is.na(p)) {
+    p <- ncol(df) -1   ## COMMENT HERE
+  }
+  
+  ## Calculate the ideal number of testing set
+  test_N <- (1/sqrt(p))*nrow(df)
+  ## Turn that into a testing proportion
+  test_prop <- round((1/sqrt(p))*nrow(df)/nrow(df), 2)
+  ## And find the training proportion
+  train_prop <- 1-test_prop
+  
+  ## Tell us the results!
+  print(paste0("The ideal split ratio is ", train_prop, ":", test_prop, " training:testing"))
+  
+  ## Return the size of the training set
+  return(train_prop)
+}
+
+calcSplitRatio(p=NA, colic_data)
 ```
+
+## Remove rows with NA values for surgery or outcome
 ```{r}
-# Convert columns to numeric if containing numeric data
-colic_test[, c(4,5,6,16,17)] <- sapply(colic_test[, c(4,5,6,16,17)], as.numeric)
-colic_training[, c(4,5,6,16,17)] <- sapply(colic_training[, c(4,5,6,16,17)], as.numeric)
-
-# Convert columns to factor if containing factor data
-colic_test[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)] <- lapply(colic_test[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)], as.factor)
-colic_training[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)] <- lapply(colic_training[, c(1,2,7,8,9,10,11,12,13,14,15,18,19,20)], as.factor)
-
-#Replace NA values with median values for rectal temperature, pulse, respiratory_rate, packed_cell_volume, total_protein
-colic_training <- colic_training %>% mutate(across(rectal_temperature, ~replace_na(., median(., na.rm=TRUE))))
-colic_training <- colic_training %>% mutate(across(pulse, ~replace_na(., median(., na.rm=TRUE))))
-colic_training <- colic_training %>% mutate(across(respiratory_rate, ~replace_na(., median(., na.rm=TRUE))))
-colic_training <- colic_training %>% mutate(across(packed_cell_Volume, ~replace_na(., median(., na.rm=TRUE))))
-colic_training <- colic_training %>% mutate(across(total_protein, ~replace_na(., median(., na.rm=TRUE))))
-
-colic_test <- colic_test %>% mutate(across(rectal_temperature, ~replace_na(., median(., na.rm=TRUE))))
-colic_test <- colic_test %>% mutate(across(pulse, ~replace_na(., median(., na.rm=TRUE))))
-colic_test <- colic_test %>% mutate(across(respiratory_rate, ~replace_na(., median(., na.rm=TRUE))))
-colic_test <- colic_test %>% mutate(across(packed_cell_Volume, ~replace_na(., median(., na.rm=TRUE))))
-colic_test <- colic_test %>% mutate(across(total_protein, ~replace_na(., median(., na.rm=TRUE))))
+# Remove rows where surgery or outcome have NA value
+colic_data <- colic_data %>%
+  filter(
+    !is.na(surgery),
+    !is.na(outcome)
+    )
 ```
+
 ```{r}
-# Replace NA values with 0 to indicate that the metric was not taken or was not recorded which may negatively impact outcome for extremity_temperature, peripheral_pulse, mucous membrane, capillary_refill_time, pain_rating, peristalsis, abdominal_distension
-colic_training$extremity_temperature <- colic_training$extremity_temperature %>% replace_na(0)
-colic_training$peripheral_pulse <- colic_training$peripheral_pulse %>% replace_na(0)
-colic_training$mucous_membrane <- colic_training$mucous_membrane %>% replace_na(0)
-colic_training$capillary_refill_time <- colic_training$capillary_refill_time %>% replace_na(0)
-colic_training$pain_rating <- colic_training$pain_rating %>% replace_na(0)
-colic_training$abdominal_distension <- colic_training$abdominal_distension %>% replace_na(0)
-
-colic_test$extremity_temperature <- colic_test$extremity_temperature %>% replace_na(0)
-colic_test$peripheral_pulse <- colic_test$peripheral_pulse %>% replace_na(0)
-colic_test$mucous_membrane <- colic_test$mucous_membrane %>% replace_na(0)
-colic_test$capillary_refill_time <- colic_test$capillary_refill_time %>% replace_na(0)
-colic_test$pain_rating <- colic_test$pain_rating %>% replace_na(0)
-colic_test$abdominal_distension <- colic_test$abdominal_distension %>% replace_na(0)
+# Convert columns to numeric if containing numeric or ordered data with more than 2 values, otherwise convert to factor
+colic_data[, c(3:5, 11:14)] <- sapply(colic_data[, c(3:5, 11:14)], as.numeric)
+colic_data[, c(1:2, 5:11, 15)] <- lapply(colic_data[, c(1:2, 6:11, 15)], factor)
 ```
 
+# Separate dataset into training and test sets
+```{r}
+training <- createDataPartition(colic_data$outcome,
+                                         p = 0.73,
+                                         list = FALSE,
+                                         times = 1)
+
+colic_training <- colic_data[training, ]
+colic_test <- colic_data[-training, ]
+```
+
+# Impute values in datasets using MICE
+```{r}
+# MICE will be used to impute missing values in training and test sets
+md.pattern(colic_training) # Get an idea of the pattern of missing data
+imp <- mice(colic_training, seed = 223)
+print(imp)
+colic_training_imp <- complete(imp)
+
+md.pattern(colic_test) # Get an idea of the pattern of missing data
+imp <- mice(colic_test, seed = 223)
+print(imp)
+colic_test_imp <- complete(imp)
+```
+
+# One-hot encode factor variables
+```{r}
+# Training Set
+onehot_encoder <- dummyVars(~ surgery + age + extremity_temperature + peripheral_pulse + mucous_membrane + capillary_refill_time + pain_rating + peristalsis,
+                            colic_training_imp[, c("surgery", "age", "extremity_temperature", "peripheral_pulse", "mucous_membrane", "capillary_refill_time", "pain_rating", "peristalsis")],
+                            levelsOnly = TRUE,
+                            fullRank = TRUE)
+
+onehot_enc_training <- predict(onehot_encoder,
+                               colic_training_imp[, c("surgery", "age", "extremity_temperature", "peripheral_pulse", "mucous_membrane", "capillary_refill_time", "pain_rating", "peristalsis")])
+
+colic_training_imp <- cbind(colic_training_imp, onehot_enc_training)
+
+# Test Set
+onehot_encoder <- dummyVars(~ surgery + age + extremity_temperature + peripheral_pulse + mucous_membrane + capillary_refill_time + pain_rating + peristalsis,
+                            colic_test_imp[, c("surgery", "age", "extremity_temperature", "peripheral_pulse", "mucous_membrane", "capillary_refill_time", "pain_rating", "peristalsis")],
+                            levelsOnly = TRUE,
+                            fullRank = TRUE)
+
+onehot_enc_training <- predict(onehot_encoder,
+                               colic_test_imp[, c("surgery", "age", "extremity_temperature", "peripheral_pulse", "mucous_membrane", "capillary_refill_time", "pain_rating", "peristalsis")])
+
+colic_test_imp <- cbind(colic_test_imp, onehot_enc_training)
+```
+
+# Normalize numeric columns
+```{r}
+# Function to normalize specific columns based on dataset and columns specified
+normalize <- function(dataset, columns) {
+  scale(dataset[, columns],
+  center = apply(dataset[, columns], 2, mean),
+  scale = apply(dataset[, columns], 2, sd)
+  )
+}
+columns <- c(3:5, 12:14)
+colic_training_imp[, columns] <- normalize(colic_training_imp, columns)
+colic_test_imp[, columns] <- normalize(colic_test_imp, columns)
+```
+
+# Train a dense neural network to predict outcome - NOT YET EDITED
+```{r}
+# Unlist should include all numeric
+training_features <- array(data = unlist(training_set[, -columns]),
+                           dim = c(nrow(training_set), 35))
+training_labels <- array(data = unlist(training_set[, 15]),
+                         dim = c(nrow(training_set)))
+test_features <- array(data = unlist(test_set[, -columns]),
+                       dim = c(nrow(test_set), 35))
+test_labels <- array(data = unlist(test_set[, 15]),
+                     dim = c(nrow(test_set)))
+
+use_virtualenv("my_tf_workspace")
+
+model <- keras_model_sequential(list(
+  layer_dense(units = 50, activation = "relu"),
+  layer_dense(units = 25, activation = "relu"),
+  layer_dense(units = 1, activation = "sigmoid")
+))
+
+compile(model,
+        optimizer = "adam",
+        loss = "binary_crossentropy",
+        metrics = "accuracy")
+
+history <- fit(model, training_features, training_labels,
+               epochs = 40, batch_size = 512, validation_split = 0.33)
+```
+
+# Evaluating model
+
+```{r}
+predictions <- predict(model, test_features)
+test_set$p_prob <- predictions[, 1]
+head(predictions, 10)
+```
+
+# ROC Curve
+
+```{r}
+over_threshold <- test_set[test_set$p_prob >= 0.5, ]
+fpr <- sum(over_threshold$booking_status==0)/sum(test_set$booking_status==0)
+fpr
+tpr <- sum(over_threshold$booking_status==1)/sum(test_set$booking_status==1)
+tpr
+
+roc_data <- data.frame(threshold=seq(1,0,-0.01), fpr=0, tpr=0)
+for (i in roc_data$threshold) {
+  over_threshold <- test_set[test_set$p_prob >= i, ]
+  fpr <- sum(over_threshold$booking_status==0)/sum(test_set$booking_status==0)
+  roc_data[roc_data$threshold==i, "fpr"] <- fpr
+  tpr <- sum(over_threshold$booking_status==1)/sum(test_set$booking_status==1)
+  roc_data[roc_data$threshold==i, "tpr"] <- tpr
+}
+ggplot() +
+  geom_line(data = roc_data, aes(x = fpr, y = tpr, color = threshold), size = 2) +
+  scale_color_gradientn(colors = rainbow(3)) +
+  geom_abline(intercept = 0, slope = 1, lty = 2) +
+  geom_point(data = roc_data[seq(1, 101, 10), ], aes(x = fpr, y = tpr)) +
+  geom_text(data = roc_data[seq(1, 101, 10), ],
+            aes(x = fpr, y = tpr, label = threshold, hjust = 1.2, vjust = -0.2))
+```
+
+# Accuracy
+
+```{r}
+test_results <-
+  test_set %>%
+  select(booking_status) %>%
+  bind_cols(
+    data.frame(p_1 = predictions)
+  )
+
+threshold <- 0.5
+
+test_results$predictions <- ifelse(test_results$p_1 >= threshold, 1, 0)
+tp <- nrow(test_results[test_results$booking_status==1 & test_results$predictions==1, ])
+fp <- nrow(test_results[test_results$booking_status==0 & test_results$predictions==1, ])
+tn <- nrow(test_results[test_results$booking_status==0 & test_results$predictions==0, ])
+fn <- nrow(test_results[test_results$booking_status==1 & test_results$predictions==0, ])
+
+accuracy <- (tp + tn) / (tp + fp + tn + fn)
+accuracy
+```
+
+# AUC
+
+```{r}
+auc <- auc(x = roc_data$fpr, y = roc_data$tpr, type = "spline")
+auc
+```
+
+# Calibration Curves
+
+```{r}
+in_interval <- test_set[test_set$p_prob >= 0.45 & test_set$p_prob <= 0.55, ]
+```
+
+```{r}
+nrow(in_interval[in_interval$booking_status==1, ])/nrow(in_interval)
+```
+
+```{r}
+calibration_data <- data.frame(bin_midpoint=seq(0.05,0.95,0.1),
+observed_event_percentage=0)
+for (i in seq(0.05,0.95,0.1)) {
+  in_interval <- test_set[test_set$p_prob >= (i-0.05) & test_set$p_prob <= (i+0.05), ]
+  oep <- nrow(in_interval[in_interval$booking_status==1, ])/nrow(in_interval)
+  calibration_data[calibration_data$bin_midpoint==i, "observed_event_percentage"] <- oep
+}
+ggplot(data = calibration_data, aes(x = bin_midpoint, y = observed_event_percentage)) +
+  geom_line(size = 1) +
+  geom_abline(intercept = 0, slope = 1, lty = 2) +
+  geom_point(size = 2) +
+  geom_text(aes(label = bin_midpoint), hjust = 0.75, vjust = -0.5)
+```
